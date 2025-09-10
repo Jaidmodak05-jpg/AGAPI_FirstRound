@@ -1,41 +1,45 @@
-﻿using System.Collections;
-using UnityEngine;
+﻿using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
+using System.Collections;
 
 [RequireComponent(typeof(RectTransform))]
 public class CardUI : MonoBehaviour, IPointerClickHandler
 {
     [Header("Assign in Prefab (ROOT Card)")]
-    [SerializeField] private GameObject front;     // child named "Front"
-    [SerializeField] private GameObject back;      // child named "Back"
-    [SerializeField] private Image frontImage;     // Image component on Front (or on a child)
+    [SerializeField] GameObject front;     // child named "Front"
+    [SerializeField] GameObject back;      // child named "Back"
+    [SerializeField] Image frontImage;// Image under Front
 
-    [Header("Optional")]
-    [SerializeField] private float flipDuration = 0.22f;
+    [Header("Flip Settings")]
+    [SerializeField] float flipDuration = 0.22f;
 
-    [HideInInspector] public GameControllerUI controller;   // set by spawner
-    [HideInInspector] public AudioManager audioMgr;         // optional (or use controller.audioMgr)
+    [HideInInspector] public GameControllerUI controller;  // set by GridGenerator
+    [HideInInspector] public AudioManager audioMgr;    // set by GridGenerator
 
     public int CardId { get; private set; }
     public bool IsFaceUp { get; private set; }
     public bool IsMatched { get; private set; }
     public bool IsLocked { get; private set; }
 
-    // ----- init from spawner -----
+    bool _animating = false;   // prevents overlapping animations
+
+    void Awake()
+    {
+        ShowFace(false);
+    }
+
     public void Init(int id, Sprite faceSprite)
     {
         CardId = id;
-        SetFrontSprite(faceSprite);
-        ShowFace(false);        // start face-down
+        if (frontImage) frontImage.sprite = faceSprite;
+
+        IsFaceUp = false;
         IsMatched = false;
         IsLocked = false;
-    }
+        _animating = false;
 
-    // Kept so GridGeneratorUI can call it directly if preferred
-    public void SetFrontSprite(Sprite s)
-    {
-        if (frontImage) frontImage.sprite = s;
+        ShowFace(false);
     }
 
     public void SetMatched()
@@ -44,75 +48,133 @@ public class CardUI : MonoBehaviour, IPointerClickHandler
         IsLocked = true;
     }
 
-    public void Lock(bool v) => IsLocked = v;
+    public void Lock(bool v) { IsLocked = v; }
 
-    // EXACTLY what you were doing manually in the Hierarchy
     void ShowFace(bool faceUp)
     {
+        if (front)
+        {
+            front.SetActive(faceUp);
+            if (frontImage)
+            {
+                frontImage.enabled = faceUp;
+                if (faceUp) frontImage.color = Color.white;
+            }
+            if (faceUp) front.transform.SetAsLastSibling();
+        }
+        if (back) back.SetActive(!faceUp);
+
         IsFaceUp = faceUp;
-
-        if (front) front.SetActive(faceUp);     // FRONT on
-        if (back) back.SetActive(!faceUp);     // BACK off
-
-        if (frontImage)
-        {
-            frontImage.enabled = faceUp;
-            if (faceUp) frontImage.color = Color.white;
-        }
-
-        if (faceUp && front) front.transform.SetAsLastSibling(); // bring to top
     }
 
-    // ------- Flip coroutines (controller awaits these) -------
-    public IEnumerator FlipUp()
-    {
-        if (IsLocked || IsMatched || IsFaceUp) yield break;
-
-        // (optional tween could go here over flipDuration)
-        ShowFace(true);
-
-        if (audioMgr) audioMgr.Flip();
-        yield return null;
-    }
-
-    public IEnumerator FlipDown()
-    {
-        if (IsLocked || IsMatched || !IsFaceUp) yield break;
-
-        ShowFace(false);
-        yield return null;
-    }
-
-    public IEnumerator Vanish()
-    {
-        IsLocked = true;
-        IsMatched = true;
-
-        // quick fade (optional)
-        float t = 0f;
-        var cg = GetComponent<CanvasGroup>();
-        if (!cg) cg = gameObject.AddComponent<CanvasGroup>();
-
-        while (t < 1f)
-        {
-            t += Time.deltaTime / 0.25f;
-            cg.alpha = 1f - Mathf.Clamp01(t);
-            yield return null;
-        }
-
-        gameObject.SetActive(false);
-    }
-
-    // When clicked: flip up, then tell controller “I’m up”
     public void OnPointerClick(PointerEventData _)
     {
-        if (IsLocked || IsMatched || IsFaceUp) return;
+        if (IsLocked || IsMatched || _animating) return;
+        if (IsFaceUp) return; // already up
+        if (controller && !controller.CanAcceptClick()) return;
+
         StartCoroutine(FlipAndNotify());
     }
 
     IEnumerator FlipAndNotify()
     {
+        IsLocked = true;
+        _animating = true;
+
         yield return StartCoroutine(FlipUp());
+
+        _animating = false;
+        IsLocked = false;
+
         if (controller) controller.OnCardFlippedUp(this);
+    }
+
+    public IEnumerator FlipUp()
+    {
+        if (IsFaceUp || IsMatched) yield break;
+
+        Transform tr = transform;
+        float half = Mathf.Max(0.01f, flipDuration * 0.5f);
+
+        float t = 0f;
+        while (t < half)
+        {
+            t += Time.deltaTime;
+            tr.localScale = new Vector3(1f - (t / half), 1f, 1f);
+            yield return null;
+        }
+        tr.localScale = new Vector3(0f, 1f, 1f);
+
+        ShowFace(true);
+
+        t = 0f;
+        while (t < half)
+        {
+            t += Time.deltaTime;
+            tr.localScale = new Vector3((t / half), 1f, 1f);
+            yield return null;
+        }
+        tr.localScale = Vector3.one;
+
+        if (audioMgr) audioMgr.Flip();
+    }
+
+    public IEnumerator FlipDown()
+    {
+        if (!IsFaceUp || IsMatched) yield break;
+
+        Transform tr = transform;
+        float half = Mathf.Max(0.01f, flipDuration * 0.5f);
+
+        float t = 0f;
+        while (t < half)
+        {
+            t += Time.deltaTime;
+            tr.localScale = new Vector3(1f - (t / half), 1f, 1f);
+            yield return null;
+        }
+        tr.localScale = new Vector3(0f, 1f, 1f);
+
+        ShowFace(false);
+
+        t = 0f;
+        while (t < half)
+        {
+            t += Time.deltaTime;
+            tr.localScale = new Vector3((t / half), 1f, 1f);
+            yield return null;
+        }
+        tr.localScale = Vector3.one;
+
+        if (audioMgr) audioMgr.Flip();
+    }
+
+    public IEnumerator Vanish()
+    {
+        IsMatched = true;
+        IsLocked = true;
+
+        var cg = GetComponent<CanvasGroup>();
+        if (!cg) cg = gameObject.AddComponent<CanvasGroup>();
+
+        // little pop then fade
+        var rt = (RectTransform)transform;
+        float popT = 0f;
+        while (popT < 0.08f)
+        {
+            popT += Time.deltaTime;
+            rt.localScale = Vector3.Lerp(Vector3.one, Vector3.one * 1.12f, popT / 0.08f);
+            yield return null;
+        }
+
+        float t = 0f;
+        while (t < 0.25f)
+        {
+            t += Time.deltaTime;
+            cg.alpha = 1f - (t / 0.25f);
+            yield return null;
+        }
+
+        gameObject.SetActive(false);
     }
 }
