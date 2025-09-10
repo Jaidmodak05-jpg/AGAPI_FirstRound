@@ -1,5 +1,4 @@
-﻿using System;
-using System.Collections;
+﻿using System.Collections;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
@@ -8,74 +7,32 @@ using UnityEngine.UI;
 public class CardUI : MonoBehaviour, IPointerClickHandler
 {
     [Header("Assign in Prefab (ROOT Card)")]
-    [SerializeField] private GameObject front;        // child named "Front"
-    [SerializeField] private GameObject back;         // child named "Back"
-    [SerializeField] private Image frontImage;        // Image inside Front
+    [SerializeField] private GameObject front;     // child named "Front"
+    [SerializeField] private GameObject back;      // child named "Back"
+    [SerializeField] private Image frontImage;     // Image component on Front (or on a child)
 
     [Header("Optional")]
     [SerializeField] private float flipDuration = 0.22f;
+
+    [HideInInspector] public GameControllerUI controller;   // set by spawner
+    [HideInInspector] public AudioManager audioMgr;         // optional (or use controller.audioMgr)
 
     public int CardId { get; private set; }
     public bool IsFaceUp { get; private set; }
     public bool IsMatched { get; private set; }
     public bool IsLocked { get; private set; }
 
-    bool isFlipping;
-    Action<CardUI> onClicked;
-
-    void Reset()
-    {
-        if (!front) front = transform.Find("Front")?.gameObject;
-        if (!back) back = transform.Find("Back")?.gameObject;
-        if (!frontImage && front) frontImage = front.GetComponentInChildren<Image>(true);
-
-        // 🔸 Ensure the root has a raycastable Graphic so clicks reach OnPointerClick
-        if (!TryGetComponent<Image>(out var hitbox))
-        {
-            hitbox = gameObject.AddComponent<Image>();
-            hitbox.color = new Color(0, 0, 0, 0); // fully transparent
-        }
-        hitbox.raycastTarget = true;
-
-        // (CanvasGroup is fine but not required here)
-        if (!TryGetComponent<CanvasGroup>(out var cg)) cg = gameObject.AddComponent<CanvasGroup>();
-        cg.alpha = 1f;
-        cg.interactable = true;
-        cg.blocksRaycasts = true;
-    }
-
-    // Called by your grid/controller right after Instantiate
-    public void Init(int id, Action<CardUI> onClickedCallback)
+    // ----- init from spawner -----
+    public void Init(int id, Sprite faceSprite)
     {
         CardId = id;
-        onClicked = onClickedCallback;
-
+        SetFrontSprite(faceSprite);
+        ShowFace(false);        // start face-down
         IsMatched = false;
         IsLocked = false;
-        isFlipping = false;
-
-        // Start like your manual setup: both ON, Back above Front
-        if (front)
-        {
-            front.SetActive(true);
-            if (frontImage)
-            {
-                frontImage.enabled = true;
-                frontImage.color = Color.white;
-            }
-        }
-        if (back)
-        {
-            back.SetActive(true);
-            back.transform.SetAsLastSibling();   // Back on top to cover Front
-        }
-
-        IsFaceUp = false; // Back visible → considered face-down
-
-        transform.localScale = Vector3.one;
-        gameObject.SetActive(true);
     }
 
+    // Kept so GridGeneratorUI can call it directly if preferred
     public void SetFrontSprite(Sprite s)
     {
         if (frontImage) frontImage.sprite = s;
@@ -89,100 +46,73 @@ public class CardUI : MonoBehaviour, IPointerClickHandler
 
     public void Lock(bool v) => IsLocked = v;
 
-    // Root receives clicks now because of the invisible Image hitbox
+    // EXACTLY what you were doing manually in the Hierarchy
+    void ShowFace(bool faceUp)
+    {
+        IsFaceUp = faceUp;
+
+        if (front) front.SetActive(faceUp);     // FRONT on
+        if (back) back.SetActive(!faceUp);     // BACK off
+
+        if (frontImage)
+        {
+            frontImage.enabled = faceUp;
+            if (faceUp) frontImage.color = Color.white;
+        }
+
+        if (faceUp && front) front.transform.SetAsLastSibling(); // bring to top
+    }
+
+    // ------- Flip coroutines (controller awaits these) -------
+    public IEnumerator FlipUp()
+    {
+        if (IsLocked || IsMatched || IsFaceUp) yield break;
+
+        // (optional tween could go here over flipDuration)
+        ShowFace(true);
+
+        if (audioMgr) audioMgr.Flip();
+        yield return null;
+    }
+
+    public IEnumerator FlipDown()
+    {
+        if (IsLocked || IsMatched || !IsFaceUp) yield break;
+
+        ShowFace(false);
+        yield return null;
+    }
+
+    public IEnumerator Vanish()
+    {
+        IsLocked = true;
+        IsMatched = true;
+
+        // quick fade (optional)
+        float t = 0f;
+        var cg = GetComponent<CanvasGroup>();
+        if (!cg) cg = gameObject.AddComponent<CanvasGroup>();
+
+        while (t < 1f)
+        {
+            t += Time.deltaTime / 0.25f;
+            cg.alpha = 1f - Mathf.Clamp01(t);
+            yield return null;
+        }
+
+        gameObject.SetActive(false);
+    }
+
+    // When clicked: flip up, then tell controller “I’m up”
     public void OnPointerClick(PointerEventData _)
     {
-        if (IsLocked || IsMatched || isFlipping) return;
-
-        if (onClicked != null)
-        {
-            onClicked(this); // let the controller decide (enforce 2 at a time, etc.)
-        }
-        else
-        {
-            // local test toggle
-            if (IsFaceUp) FlipDown();
-            else FlipUp();
-        }
+        if (IsLocked || IsMatched || IsFaceUp) return;
+        StartCoroutine(FlipAndNotify());
     }
 
-    public void FlipUp(Action onDone = null)
+    IEnumerator FlipAndNotify()
     {
-        if (IsFaceUp || IsLocked || IsMatched) { onDone?.Invoke(); return; }
-        StartCoroutine(FlipRoutine(true, onDone));
-    }
-
-    public void FlipDown(Action onDone = null)
-    {
-        if (!IsFaceUp) { onDone?.Invoke(); return; }
-        StartCoroutine(FlipRoutine(false, onDone));
-    }
-
-    IEnumerator FlipRoutine(bool toFaceUp, Action onDone)
-    {
-        isFlipping = true;
-
-        // quick squash animation (optional)
-        Vector3 s0 = transform.localScale;
-        float half = Mathf.Max(0.01f, flipDuration * 0.5f);
-
-        for (float t = 0; t < half; t += Time.deltaTime)
-        {
-            float k = 1f - Mathf.Clamp01(t / half);
-            transform.localScale = new Vector3(k, s0.y, s0.z);
-            yield return null;
-        }
-        transform.localScale = new Vector3(0f, s0.y, s0.z);
-
-        // 🔸 The actual visibility switch
-        if (toFaceUp)
-        {
-            if (front) front.transform.SetAsFirstSibling(); // not required, neat
-            if (back)
-            {
-                back.transform.SetAsLastSibling();
-                back.SetActive(false); // hide Back → reveal Front exactly like you do manually
-            }
-        }
-        else
-        {
-            if (back)
-            {
-                back.transform.SetAsLastSibling();
-                back.SetActive(true);  // show Back → cover Front again
-            }
-        }
-        IsFaceUp = toFaceUp;
-
-        for (float t = 0; t < half; t += Time.deltaTime)
-        {
-            float k = Mathf.Clamp01(t / half);
-            transform.localScale = new Vector3(k, s0.y, s0.z);
-            yield return null;
-        }
-        transform.localScale = s0;
-
-        isFlipping = false;
-        onDone?.Invoke();
-    }
-
-    public IEnumerator Vanish(float duration = 0.15f)
-    {
-        if (!TryGetComponent<CanvasGroup>(out var cg))
-            cg = gameObject.AddComponent<CanvasGroup>();
-
-        Vector3 s0 = transform.localScale;
-        float t = 0f;
-        while (t < duration)
-        {
-            t += Time.deltaTime;
-            float k = Mathf.Clamp01(t / duration);
-            cg.alpha = 1f - k;
-            transform.localScale = Vector3.Lerp(s0, Vector3.zero, k);
-            yield return null;
-        }
-        cg.alpha = 0f;
-        transform.localScale = Vector3.zero;
-        gameObject.SetActive(false);
+        yield return StartCoroutine(FlipUp());
+        if (controller) controller.OnCardFlippedUp(this);
     }
 }

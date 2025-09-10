@@ -1,121 +1,123 @@
-﻿using System.Collections;
+﻿using UnityEngine;
+using TMPro;
+using System.Collections;
 using System.Collections.Generic;
-using UnityEngine;
 
 public class GameControllerUI : MonoBehaviour
 {
     [Header("Refs")]
-    public GridGeneratorUI grid;           // your existing spawner
-    public RectTransform board;            // board parent
-    public GameObject cardPrefab;          // Card1 (the prefab wired to CardUI)
-    public List<Sprite> faceSprites;       // fill in Inspector
-    public AudioManager audioMgr;          // optional sounds
+    public GridGeneratorUI grid;
+    public RectTransform board;
+
+    [Header("HUD")]
+    public TMP_Text scoreText;
+    public TMP_Text comboText;
+    public TMP_Text timerText;
+
+    [Header("Audio")]
+    public AudioManager audioMgr;
 
     [Header("Config")]
     public int rows = 4;
     public int cols = 4;
+    public float startingTime = 90f;
 
-    readonly List<CardUI> allCards = new();
+    // runtime
+    int score;
+    int combo;
+    float timeLeft;
+    bool running;
+
     readonly List<CardUI> pending = new();
-    bool resolving;
+    bool resolving = false;
 
-    void Start()
+    void Start() => StartNewGame(rows, cols);
+
+    public void StartNewGame(int r, int c)
     {
-        StartNewGame();
+        rows = r; cols = c;
+
+        grid.Generate(rows, cols, new System.Random());
+
+        score = 0;
+        combo = 0;
+        timeLeft = startingTime;
+        running = true;
+
+        UpdateUI();
     }
 
-    public void StartNewGame()
+    void Update()
     {
-        // spawn grid (use your existing grid.Generate if you prefer)
-        allCards.Clear();
-        pending.Clear();
+        if (!running) return;
 
-        System.Random rng = new System.Random();
+        timeLeft -= Time.deltaTime;
+        if (timerText) timerText.text = FormatTime(timeLeft);
 
-        // Build the deck ids (pairs) and shuffle
-        int total = rows * cols;
-        int pairs = total / 2;
-        var ids = new List<int>(total);
-        for (int i = 0; i < pairs; i++) { ids.Add(i); ids.Add(i); }
-        while (ids.Count < total) ids.Add(pairs);
-        for (int i = 0; i < ids.Count; i++)
+        if (timeLeft <= 0f)
         {
-            int j = rng.Next(i, ids.Count);
-            (ids[i], ids[j]) = (ids[j], ids[i]);
+            running = false;
+            if (audioMgr) audioMgr.GameOver();
+            // show game over UI here if you want
         }
-
-        // Clear board
-        for (int i = board.childCount - 1; i >= 0; i--) Destroy(board.GetChild(i).gameObject);
-
-        // Simple grid placement (use your GridGeneratorUI if you already have it):
-        float size = 220f, gap = 8f;
-        float totalW = cols * size + (cols - 1) * gap;
-        float totalH = rows * size + (rows - 1) * gap;
-        float ox = -totalW * 0.5f + size * 0.5f;
-        float oy = totalH * 0.5f - size * 0.5f;
-
-        int k = 0;
-        for (int r = 0; r < rows; r++)
-            for (int c = 0; c < cols; c++)
-            {
-                int id = ids[k++];
-                var go = Instantiate(cardPrefab, board);
-                var rt = (RectTransform)go.transform;
-                rt.sizeDelta = new Vector2(size, size);
-                rt.anchoredPosition = new Vector2(ox + c * (size + gap), oy - r * (size + gap));
-
-                var card = go.GetComponent<CardUI>();
-                card.Init(id, OnCardClicked);
-                if (id >= 0 && id < faceSprites.Count)
-                    card.SetFrontSprite(faceSprites[id]);
-
-                allCards.Add(card);
-            }
     }
 
-    void OnCardClicked(CardUI card)
+    string FormatTime(float t)
     {
-        if (resolving) return;
-        if (pending.Count >= 2) return;
-        if (card.IsFaceUp) return; // already open
-        if (card.IsMatched) return;
+        t = Mathf.Max(0, t);
+        int m = (int)(t / 60f);
+        int s = (int)(t % 60f);
+        return $"{m:0}:{s:00}";
+    }
 
-        audioMgr?.Flip(); // optional sfx
-        card.FlipUp(() =>
-        {
-            pending.Add(card);
-            if (pending.Count == 2) StartCoroutine(ResolvePair());
-        });
+    void UpdateUI()
+    {
+        if (scoreText) scoreText.text = $"Score: {score}";
+        if (comboText) comboText.text = combo > 0 ? $"Combo: x{combo}" : "";
+        if (timerText) timerText.text = FormatTime(timeLeft);
+    }
+
+    // Called by CardUI after it finishes FlipUp
+    public void OnCardFlippedUp(CardUI card)
+    {
+        if (!running || resolving) return;
+        if (pending.Contains(card)) return;
+
+        pending.Add(card);
+        if (pending.Count == 2)
+            StartCoroutine(ResolvePair());
     }
 
     IEnumerator ResolvePair()
     {
         resolving = true;
-
-        // tiny delay so the player can see both
-        yield return new WaitForSeconds(0.25f);
+        yield return new WaitForSeconds(0.25f); // let the player see both
 
         var a = pending[0];
         var b = pending[1];
 
         if (a.CardId == b.CardId)
         {
-            // match!
-            a.SetMatched();
-            b.SetMatched();
-            audioMgr?.Match();
-            yield return a.StartCoroutine(a.Vanish());
-            yield return b.StartCoroutine(b.Vanish());
+            // MATCH
+            combo++;
+            score += 100 * combo;
+            if (audioMgr) audioMgr.Match(combo);
+
+            yield return StartCoroutine(a.Vanish());
+            yield return StartCoroutine(b.Vanish());
         }
         else
         {
-            // miss → flip both back down
-            audioMgr?.Miss();
-            a.FlipDown();
-            b.FlipDown();
+            // MISS
+            combo = 0;
+            if (audioMgr) audioMgr.Miss();
+
+            yield return StartCoroutine(a.FlipDown());
+            yield return StartCoroutine(b.FlipDown());
         }
 
         pending.Clear();
         resolving = false;
+        UpdateUI();
     }
 }
