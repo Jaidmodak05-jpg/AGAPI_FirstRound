@@ -1688,7 +1688,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: 'Time''s Out '
+  m_text: Game Over!
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
@@ -1931,8 +1931,8 @@ MonoBehaviour:
   comboText: {fileID: 1710324131}
   timerText: {fileID: 114437734}
   audioMgr: {fileID: 473972950}
-  rows: 4
-  cols: 4
+  rows: 5
+  cols: 6
   startingTime: 90
   gameOverPanel: {fileID: 125472526}
   finalScoreText: {fileID: 309940931}
