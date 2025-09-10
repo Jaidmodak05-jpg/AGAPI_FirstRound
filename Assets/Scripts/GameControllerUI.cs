@@ -23,9 +23,9 @@ public class GameControllerUI : MonoBehaviour
     public float startingTime = 90f;
 
     [Header("Game Over UI (optional)")]
-    public GameObject gameOverPanel;    // drag panel (inactive by default)
-    public TMP_Text finalScoreText;   // optional
-    public TMP_Text bestScoreText;    // optional
+    public GameObject gameOverPanel;
+    public TMP_Text finalScoreText;
+    public TMP_Text bestScoreText;
 
     // runtime
     int score;
@@ -33,14 +33,16 @@ public class GameControllerUI : MonoBehaviour
     float timeLeft;
     bool running;
 
+    // input gating
+    bool resolving = false;       // we're resolving a pair (no new clicks)
+    bool inputLocked = false;     // global click gate while resolving
+
     readonly List<CardUI> pending = new();
-    bool resolving = false;
 
     int bestScore;
 
     void Start()
     {
-        // load best score from previous runs
         bestScore = PlayerPrefs.GetInt("BestScore", 0);
         StartNewGame(rows, cols);
     }
@@ -49,19 +51,17 @@ public class GameControllerUI : MonoBehaviour
     {
         rows = r; cols = c;
 
-        // clean fresh run
         score = 0;
         combo = 0;
         timeLeft = startingTime;
         running = true;
         resolving = false;
+        inputLocked = false;
         pending.Clear();
 
         if (gameOverPanel) gameOverPanel.SetActive(false);
 
-        // spawn grid (your GridGenerator wires sprites + controller + audio)
-        grid.Generate(rows, cols, new System.Random());
-
+        grid.Generate(rows, cols, new System.Random());   // your spawner
         UpdateUI();
     }
 
@@ -70,11 +70,6 @@ public class GameControllerUI : MonoBehaviour
         if (!running) return;
 
         timeLeft -= Time.deltaTime;
-
-        // update HUD every frame
-        UpdateUI();
-
-        // time-up → end run
         if (timeLeft <= 0f)
         {
             timeLeft = 0f;
@@ -82,11 +77,12 @@ public class GameControllerUI : MonoBehaviour
             if (audioMgr) audioMgr.GameOver();
             FinishRun();
         }
+
+        UpdateUI();
     }
 
     void FinishRun()
     {
-        // save best score
         if (score > bestScore)
         {
             bestScore = score;
@@ -94,7 +90,6 @@ public class GameControllerUI : MonoBehaviour
             PlayerPrefs.Save();
         }
 
-        // show overlay
         if (finalScoreText) finalScoreText.text = $"Score: {score}";
         if (bestScoreText) bestScoreText.text = $"Best: {bestScore}";
         if (gameOverPanel) gameOverPanel.SetActive(true);
@@ -104,11 +99,9 @@ public class GameControllerUI : MonoBehaviour
     {
         if (scoreText) scoreText.text = $"Score: {score}";
         if (comboText) comboText.text = combo > 0 ? $"Combo: x{combo}" : "Combo: -";
-        if (timerText) timerText.text = FormatTime(timeLeft);
-
-        // low-time color shift (white → red under 20s)
         if (timerText)
         {
+            timerText.text = FormatTime(timeLeft);
             var t = Mathf.InverseLerp(20f, 0f, timeLeft);
             timerText.color = Color.Lerp(Color.white, new Color(1f, .3f, .3f), t);
         }
@@ -122,22 +115,34 @@ public class GameControllerUI : MonoBehaviour
         return $"{m:00}:{s:00}";
     }
 
-    // Called by CardUI *after* it finishes FlipUp (see CardUI.OnPointerClick)
+    // ====== CLICK FLOW ======
+
+    // Card asks: may I accept a click right now?
+    public bool CanAcceptClick()
+    {
+        return running && !resolving && !inputLocked;
+    }
+
+    // Card informs: I have just flipped up and am ready to be evaluated.
     public void OnCardFlippedUp(CardUI card)
     {
-        if (!running || resolving) return;
-        if (pending.Contains(card)) return;
+        if (!running || resolving || inputLocked) return;
+        if (pending.Count == 1 && ReferenceEquals(pending[0], card)) return; // ignore double
 
         pending.Add(card);
+
         if (pending.Count == 2)
+        {
+            // lock immediately to prevent a 3rd click during the 0.25s reveal
+            inputLocked = true;
+            resolving = true;
             StartCoroutine(ResolvePair());
+        }
     }
 
     IEnumerator ResolvePair()
     {
-        resolving = true;
-
-        // tiny pause so both faces are visible
+        // small reveal delay
         yield return new WaitForSeconds(0.25f);
 
         var a = pending[0];
@@ -145,17 +150,14 @@ public class GameControllerUI : MonoBehaviour
 
         if (a.CardId == b.CardId)
         {
-            // MATCH
-            a.SetMatched(); b.SetMatched();
-
             combo++;
             score += 100 * combo;
             if (audioMgr) audioMgr.Match(combo);
 
+            a.SetMatched(); b.SetMatched();
             yield return StartCoroutine(a.Vanish());
             yield return StartCoroutine(b.Vanish());
 
-            // early win if everything is gone
             if (AllCardsGone())
             {
                 running = false;
@@ -165,7 +167,6 @@ public class GameControllerUI : MonoBehaviour
         }
         else
         {
-            // MISS
             combo = 0;
             score = Mathf.Max(0, score - 20);
             if (audioMgr) audioMgr.Miss();
@@ -176,6 +177,7 @@ public class GameControllerUI : MonoBehaviour
 
         pending.Clear();
         resolving = false;
+        inputLocked = false;
         UpdateUI();
     }
 
@@ -188,7 +190,7 @@ public class GameControllerUI : MonoBehaviour
         return true;
     }
 
-    // called by Restart button
+    // UI Button
     public void OnRestartButton()
     {
         if (gameOverPanel) gameOverPanel.SetActive(false);
