@@ -4,36 +4,37 @@ public class AudioManager : MonoBehaviour
 {
     [Header("Clips")]
     public AudioClip flipClip;
-    public AudioClip matchClip;        // base match sfx
-    public AudioClip bigMatchClip;     // optional stronger sfx for higher combos
+    public AudioClip matchClip;
     public AudioClip missClip;
     public AudioClip gameOverClip;
 
-    [Header("Mixer")]
-    public AudioSource sfx;            // assign in Inspector
+    AudioSource src;
 
-    void Play(AudioClip clip, float vol = 1f, float pitch = 1f)
+    void Awake()
     {
-        if (!clip || !sfx) return;
-        sfx.pitch = pitch;
-        sfx.PlayOneShot(clip, vol);
-        sfx.pitch = 1f;
+        src = GetComponent<AudioSource>();
+        if (!src) src = gameObject.AddComponent<AudioSource>();
+        src.playOnAwake = false;
     }
 
-    public void Flip() => Play(flipClip, 0.9f);
+    public void Flip()
+    {
+        if (flipClip) src.PlayOneShot(flipClip);
+    }
 
-    // Called with combo (preferred)
     public void Match(int combo)
     {
-        if (combo >= 3 && bigMatchClip)
-            Play(bigMatchClip, 1f, 1f + Mathf.Min(0.15f, 0.03f * (combo - 3)));
-        else
-            Play(matchClip, 1f, 1f + Mathf.Min(0.1f, 0.02f * Mathf.Max(0, combo - 1)));
+        // you could vary pitch/volume with combo if you want
+        if (matchClip) src.PlayOneShot(matchClip);
     }
 
-    // Overload so GameControllerUI can just call Match()
-    public void Match() => Play(matchClip, 1f);
+    public void Miss()
+    {
+        if (missClip) src.PlayOneShot(missClip);
+    }
 
-    public void Miss() => Play(missClip, 1f);
-    public void GameOver() => Play(gameOverClip, 1f);
+    public void GameOver()
+    {
+        if (gameOverClip) src.PlayOneShot(gameOverClip);
+    }
 }
